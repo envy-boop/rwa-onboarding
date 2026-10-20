@@ -78,7 +78,7 @@ a{color:var(--brand)}
 .guide .vera{width:76px;cursor:pointer}
 .bubble{position:relative;background:var(--card);border:1px solid var(--line);border-radius:20px 20px 20px 6px;padding:12px 14px;min-height:64px}
 .bubble .who{font:700 13px var(--display);color:var(--brand);display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
-.bubble .say{margin:0;font-size:15.5px;display:grid}.bubble .say>span{grid-area:1/1}.bubble .say .full{visibility:hidden}
+.bubble .say{margin:0;font-size:15.5px;display:grid}.say .rest{color:var(--mute);opacity:.7}.say .spk{transition:color .15s}.bubble .say>span{grid-area:1/1}.bubble .say .full{visibility:hidden}
 .replay{background:none;border:0;padding:4px;cursor:pointer;color:var(--mute);display:inline-flex}
 .replay svg{width:18px;height:18px}
 
@@ -92,6 +92,10 @@ a{color:var(--brand)}
 .now .dot{border-color:var(--brand);color:var(--brand);box-shadow:0 0 0 5px var(--tint)}
 .rail .nm{font-size:12px;font-weight:600;color:var(--mute);line-height:1.2}
 .now .nm{color:var(--ink)}
+.prog{grid-column:1/-1;display:flex;align-items:center;gap:12px}
+.prog .track{flex:1;height:8px;border-radius:99px;background:var(--line);overflow:hidden}
+.prog .track i{display:block;height:100%;width:0;background:var(--brand);border-radius:99px;transition:width .5s cubic-bezier(.2,.8,.2,1)}
+.prog b{font-size:13px;color:var(--mute);font-weight:700;min-width:7.5em;text-align:right}
 .railnote{font-size:13.5px;color:var(--mute);margin:6px 0 0;min-height:1.4em;text-align:center}
 
 .card{background:var(--card);border:1px solid var(--line);border-radius:26px;padding:22px 20px}
@@ -262,25 +266,38 @@ addEventListener('pointermove',e=>{cancelAnimationFrame(eyeRaf);eyeRaf=requestAn
 
 /* ============ Vera: voice ============ */
 const V={ok:'speechSynthesis' in window,on:true,voice:null,last:''};
+// Prefer voices built into the device: they start instantly and don't stutter.
+// Online voices (streamed from the internet) are only used if the device has no English voice.
 function pickVoice(){if(!V.ok)return;const vs=speechSynthesis.getVoices();if(!vs.length)return;
- const pref=[/Google UK English Female/i,/Microsoft (Sonia|Libby|Aria|Jenny|Ava|Emma).*(Online|Natural)/i,/Samantha/i,/Serena|Karen|Moira|Tessa|Martha/i,/Microsoft (Zira|Hazel|Susan)/i,/Google US English/i];
- for(const p of pref){const v=vs.find(v=>p.test(v.name));if(v){V.voice=v;return}}
- V.voice=vs.find(v=>/^en[-_](GB|NG|ZA|KE|GH)/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null}
+ const en=vs.filter(v=>/^en/i.test(v.lang)),local=en.filter(v=>v.localService);
+ const pref=[/Samantha/i,/Serena|Karen|Moira|Tessa|Martha|Daniel/i,/Microsoft (Sonia|Libby|Hazel|Susan|Zira|Aria|Jenny)/i,/English.*(United Kingdom|Nigeria|South Africa|Kenya|Ireland)/i,/Google UK English Female/i,/Google US English/i];
+ const byName=list=>{for(const p of pref){const v=list.find(v=>p.test(v.name));if(v)return v}return null};
+ V.voice=byName(local)||local.find(v=>/^en[-_](GB|NG|ZA|KE|GH|IE|AU)/i.test(v.lang))||local[0]||byName(en)||en[0]||null}
 if(V.ok){pickVoice();speechSynthesis.onvoiceschanged=pickVoice}
 function spoken(t){return t.replace(/RWA Inc\.?/g,'R W A Inc').replace(/\bAI\b/g,'A.I.').replace(/\bUX\/UI\b/g,'U X, U I').replace(/\bQA\b/g,'Q A')}
+// Splits the text into a few longer pieces (fewer gaps), and reports progress for the captions.
+let sayId=0;
 function speak(t){
- V.last=t;if(!V.ok)return;speechSynthesis.cancel();talking(false);if(!V.on)return;
- const parts=spoken(t).match(/[^.!?]+[.!?]*/g)||[t];
- setTimeout(()=>{parts.forEach((p,k)=>{const u=new SpeechSynthesisUtterance(p.trim());if(V.voice){u.voice=V.voice;u.lang=V.voice.lang}else u.lang='en-GB';u.rate=.96;u.pitch=1.06;
-  u.onstart=()=>talking(true);if(k===parts.length-1)u.onend=u.onerror=()=>talking(false);speechSynthesis.speak(u)})},80)}
-function toggleSound(){V.on=!V.on;store.set(KEY+'-snd',V.on);syncSound();if(!V.on&&V.ok){speechSynthesis.cancel();talking(false)}else if(started)speak(V.last)}
+ V.last=t;const id=++sayId;if(!V.ok)return;speechSynthesis.cancel();talking(false);if(!V.on)return;
+ const sent=t.match(/[^.!?]+[.!?]*\s*/g)||[t],chunks=[];let start=0,buf='';
+ sent.forEach(s=>{if(buf&&(buf+s).length>220){chunks.push({start,text:buf});start+=buf.length;buf=''}buf+=s});if(buf)chunks.push({start,text:buf});
+ setTimeout(()=>{if(id!==sayId)return;chunks.forEach((ch,k)=>{const sp=spoken(ch.text),end=ch.start+ch.text.length;
+  const u=new SpeechSynthesisUtterance(sp);if(V.voice){u.voice=V.voice;u.lang=V.voice.lang}else u.lang='en-GB';u.rate=.95;u.pitch=1.05;
+  u.onstart=()=>{if(id===sayId){talking(true);caption(ch.start)}};
+  u.onboundary=e=>{if(id!==sayId||(e.name&&e.name!=='word'))return;caption(Math.min(end,ch.start+Math.round((e.charIndex+(e.charLength||0))*ch.text.length/sp.length)))};
+  u.onend=u.onerror=()=>{if(id!==sayId)return;caption(end);if(k===chunks.length-1)talking(false)};
+  speechSynthesis.speak(u)})},120)}
+// Live captions: the words already spoken are dark, the rest is lighter
+function caption(n){const el=$('say');if(!el||!V.last)return;el.innerHTML=`<span class="spk">${esc(V.last.slice(0,n))}</span><span class="rest">${esc(V.last.slice(n))}</span>`}
+function toggleSound(){V.on=!V.on;store.set(KEY+'-snd',V.on);syncSound();if(!V.on&&V.ok){speechSynthesis.cancel();talking(false);caption((V.last||'').length)}else if(started)say(V.last)}
 function syncSound(){const b=$('snd');b.setAttribute('aria-pressed',V.on);$('sndt').textContent=V.on?'Voice on':'Voice off';if(!V.ok)b.style.display='none'}
-function poke(){hop();if(started&&V.last)speak(V.last)}
+function poke(){hop();if(started&&V.last)say(V.last)}
 
 /* ============ Vera: what she says ============ */
 function say(t){
  const el=$('say');if(!el){speak(t);return}
  clearInterval(typer);speak(t);if($('sayfull'))$('sayfull').textContent=t;
+ if(V.ok&&V.on){caption(0);return}            // voice on: full text shown at once, highlighted as it's spoken
  if(RM()){el.textContent=t;return}
  let k=0;el.textContent='';typer=setInterval(()=>{el.textContent=t.slice(0,++k);if(k>=t.length)clearInterval(typer)},22)}
 const N=()=>S.first||'there';
@@ -294,7 +311,16 @@ const STAGES=[
  {nm:'Kick-off',for:'Confirm your meeting invite, then move to the next stage on Slack.'}];
 
 /* ============ the screens ============ */
-const COUNTRIES=['Nigeria','Ghana','Kenya','South Africa','Rwanda','Uganda','Tanzania','Ethiopia','Egypt','Cameroon',"Côte d'Ivoire",'Senegal','Zambia','Zimbabwe','Botswana','Morocco','Tunisia','Malawi','Namibia','Benin','Togo','Sierra Leone','Liberia','The Gambia','United Kingdom','United States','Canada','India'];
+/* Every country with its international dialing code (used to check the phone number) */
+const DIAL={};"Afghanistan:93|Albania:355|Algeria:213|Andorra:376|Angola:244|Antigua and Barbuda:1|Argentina:54|Armenia:374|Australia:61|Austria:43|Azerbaijan:994|Bahamas:1|Bahrain:973|Bangladesh:880|Barbados:1|Belarus:375|Belgium:32|Belize:501|Benin:229|Bhutan:975|Bolivia:591|Bosnia and Herzegovina:387|Botswana:267|Brazil:55|Brunei:673|Bulgaria:359|Burkina Faso:226|Burundi:257|Cabo Verde:238|Cambodia:855|Cameroon:237|Canada:1|Central African Republic:236|Chad:235|Chile:56|China:86|Colombia:57|Comoros:269|Congo (DRC):243|Congo (Republic):242|Costa Rica:506|Côte d'Ivoire:225|Croatia:385|Cuba:53|Cyprus:357|Czechia:420|Denmark:45|Djibouti:253|Dominica:1|Dominican Republic:1|Ecuador:593|Egypt:20|El Salvador:503|Equatorial Guinea:240|Eritrea:291|Estonia:372|Eswatini:268|Ethiopia:251|Fiji:679|Finland:358|France:33|Gabon:241|Georgia:995|Germany:49|Ghana:233|Greece:30|Grenada:1|Guatemala:502|Guinea:224|Guinea-Bissau:245|Guyana:592|Haiti:509|Honduras:504|Hong Kong:852|Hungary:36|Iceland:354|India:91|Indonesia:62|Iran:98|Iraq:964|Ireland:353|Israel:972|Italy:39|Jamaica:1|Japan:81|Jordan:962|Kazakhstan:7|Kenya:254|Kiribati:686|Kosovo:383|Kuwait:965|Kyrgyzstan:996|Laos:856|Latvia:371|Lebanon:961|Lesotho:266|Liberia:231|Libya:218|Liechtenstein:423|Lithuania:370|Luxembourg:352|Madagascar:261|Malawi:265|Malaysia:60|Maldives:960|Mali:223|Malta:356|Marshall Islands:692|Mauritania:222|Mauritius:230|Mexico:52|Micronesia:691|Moldova:373|Monaco:377|Mongolia:976|Montenegro:382|Morocco:212|Mozambique:258|Myanmar:95|Namibia:264|Nauru:674|Nepal:977|Netherlands:31|New Zealand:64|Nicaragua:505|Niger:227|Nigeria:234|North Korea:850|North Macedonia:389|Norway:47|Oman:968|Pakistan:92|Palau:680|Palestine:970|Panama:507|Papua New Guinea:675|Paraguay:595|Peru:51|Philippines:63|Poland:48|Portugal:351|Puerto Rico:1|Qatar:974|Romania:40|Russia:7|Rwanda:250|Saint Kitts and Nevis:1|Saint Lucia:1|Saint Vincent and the Grenadines:1|Samoa:685|San Marino:378|São Tomé and Príncipe:239|Saudi Arabia:966|Senegal:221|Serbia:381|Seychelles:248|Sierra Leone:232|Singapore:65|Slovakia:421|Slovenia:386|Solomon Islands:677|Somalia:252|South Africa:27|South Korea:82|South Sudan:211|Spain:34|Sri Lanka:94|Sudan:249|Suriname:597|Sweden:46|Switzerland:41|Syria:963|Taiwan:886|Tajikistan:992|Tanzania:255|Thailand:66|The Gambia:220|Timor-Leste:670|Togo:228|Tonga:676|Trinidad and Tobago:1|Tunisia:216|Türkiye:90|Turkmenistan:993|Tuvalu:688|Uganda:256|Ukraine:380|United Arab Emirates:971|United Kingdom:44|United States:1|Uruguay:598|Uzbekistan:998|Vanuatu:678|Vatican City:39|Venezuela:58|Vietnam:84|Yemen:967|Zambia:260|Zimbabwe:263".split('|').forEach(x=>{const k=x.lastIndexOf(':');DIAL[x.slice(0,k)]=x.slice(k+1)});
+const COUNTRIES=Object.keys(DIAL);
+const ALIAS={};"uk:United Kingdom|england:United Kingdom|scotland:United Kingdom|wales:United Kingdom|great britain:United Kingdom|britain:United Kingdom|usa:United States|us:United States|america:United States|united states of america:United States|ivory coast:Côte d'Ivoire|gambia:The Gambia|turkey:Türkiye|uae:United Arab Emirates|drc:Congo (DRC)|dr congo:Congo (DRC)|democratic republic of the congo:Congo (DRC)|congo:Congo (Republic)|republic of the congo:Congo (Republic)|czech republic:Czechia|swaziland:Eswatini|cape verde:Cabo Verde|burma:Myanmar|macedonia:North Macedonia|korea:South Korea|holland:Netherlands|ksa:Saudi Arabia|sao tome and principe:São Tomé and Príncipe|east timor:Timor-Leste|russian federation:Russia|viet nam:Vietnam".split('|').forEach(x=>{const k=x.indexOf(':');ALIAS[x.slice(0,k)]=x.slice(k+1)});
+const plain=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+// "nigeria", "NIGERIA ", "Cote dIvoire", "UK" -> official name; anything else -> ''
+function countryOf(s){const p=plain(s);if(!p)return '';return COUNTRIES.find(c=>plain(c)===p)||ALIAS[p]||''}
+// "+234 801-234 5678" or "002348012345678" -> "+2348012345678"
+function cleanPhone(s){let p=String(s||'').replace(/[\s\-().\/]/g,'');if(p.startsWith('00'))p='+'+p.slice(2);return p}
+function phonePrefill(){const c=countryOf(val('ct')),ph=$('ph');if(!c||!ph)return;const code='+'+DIAL[c];if(!ph.value.trim()||/^\+\d{0,4}\s?$/.test(ph.value.trim()))ph.value=code+' ';S.warned=''}
 const HEARD=['LinkedIn','WhatsApp','X','Instagram','Facebook','Telegram','Friend or referral','School or campus community','Online community or tech group','Other'];
 const tick=(id,txt,extra)=>`<label class="opt"><input type="checkbox" id="${id}" ${extra||''}><span class="box">${TICK}</span><span>${txt}</span></label>`;
 const radio=(name,val,txt,checked,on)=>`<label class="opt"><input type="radio" name="${name}" value="${esc(val)}" ${checked?'checked':''} ${on?`onchange="${on}"`:''}><span class="box">${TICK}</span><span>${txt}</span></label>`;
@@ -346,11 +372,18 @@ const steps=[
   go:()=>{if(!chk('c1'))return 'Confirm your contract and addendum.';const d=(document.querySelector('input[name=dp]:checked')||{}).value;if(!d)return 'Choose your department.';S.dept=d;return {ContractSigned:'Yes',Department:d}}},
  { // 6 phone + country
   stage:2,
-  line:()=>`Step three, ${N()}! Tell me a little about yourself. What's your phone number, and which country are you in?`,
+  line:()=>`Step three, ${N()}! Tell me a little about yourself. Which country are you in, and what's your phone number?`,
   html:()=>`<h1>A little about you</h1><p class="lead">So the team can reach you.</p>
-   <label class="f" for="ph">Phone number, with country code</label><input type="tel" id="ph" autocomplete="tel" placeholder="+234 801 234 5678" value="${esc(S.phone)}">
-   <label class="f" for="ct">Country you're based in</label><input type="text" id="ct" list="cts" autocomplete="country-name" placeholder="Start typing" value="${esc(S.country)}"><datalist id="cts">${COUNTRIES.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`,
-  go:()=>{if(!val('ph')||!val('ct'))return 'Fill in your phone number and country.';S.phone=val('ph');S.country=val('ct');return {Phone:S.phone,Country:S.country}}},
+   <label class="f" for="ct">Country you're based in</label><input type="text" id="ct" list="cts" autocomplete="country-name" placeholder="Start typing, then pick from the list" value="${esc(S.country)}" onchange="phonePrefill()" onblur="phonePrefill()"><datalist id="cts">${COUNTRIES.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+   <label class="f" for="ph">Phone number, with country code</label><input type="tel" id="ph" autocomplete="tel" inputmode="tel" placeholder="+234 801 234 5678" value="${esc(S.phone)}">
+   <p class="hint">Include the + and your country code. We fill in the code when you pick your country.</p>`,
+  go:()=>{
+   const c=countryOf(val('ct'));if(!c)return 'Pick your country from the list.';
+   const p=cleanPhone(val('ph'));if(!/^\+\d{8,15}$/.test(p))return 'Enter your full phone number, starting with + and your country code, for example +234 801 234 5678.';
+   const code=DIAL[c];
+   if(!p.startsWith('+'+code)&&S.warned!==p){S.warned=p;return `That number doesn't start with +${code}, the code for ${c}. If it's right, tap Continue again.`}
+   if(p.startsWith('+'+code)&&(p.length-1-code.length<6||p.length-1-code.length>12))return `That number looks too ${p.length-1-code.length<6?'short':'long'} for ${c}. Please check it.`;
+   S.country=c;S.phone=p;$('ct').value=c;return {Phone:p,Country:c}}},
  { // 7 skills
   stage:2,
   line:()=>`Now the fun part. What are you great at, ${N()}? Tell me your skills, your tools, and how much time you have each week.`,
@@ -365,7 +398,10 @@ const steps=[
    <input type="text" id="ho" style="display:none;margin-top:8px" placeholder="Tell us where">`,
   go:()=>{const av=(document.querySelector('input[name=av]:checked')||{}).value,oth=val('hw')==='Other';
    if(!val('sh')||!val('sk')||!val('tl')||!av||!val('hw')||(oth&&!val('ho')))return 'Please answer every question.';
-   let h=val('sh').replace(/\s+/g,'');if(h[0]!=='@')h='@'+h;S.slack=h;
+   if(val('sk').length<2||val('tl').length<2)return 'Tell us a little more about your skills and tools.';
+   let h=val('sh').replace(/\s+/g,'');if(h[0]!=='@')h='@'+h;
+   if(!/^@[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/.test(h))return 'Enter your Slack handle with at least 3 characters after the @, for example @ada.okafor. Use only letters, numbers, dots, dashes or underscores.';
+   S.slack=h;
    return {SlackHandle:h,Skills:val('sk'),Availability:av,Tools:val('tl'),HeardAbout:oth?'Other: '+val('ho'):val('hw')}}},
  { // 8 socials, unlocked one by one
   stage:3,
@@ -454,8 +490,8 @@ function begin(sound,resume){
  syncSound();
  if(resume){const s=store.get(KEY);if(s){S=Object.assign(S,s.S);i=s.i}}
  started=true;lastStage=steps[i].stage;
- $('root').innerHTML=`<div class="app"><aside class="side">
-   <div class="guide">${veraSVG()}<div class="bubble" aria-live="polite"><div class="who">${esc(D.config.botName)}<button class="replay" onclick="speak(V.last);hop()" title="Hear that again" aria-label="Hear that again">${SPK}</button></div><p class="say"><span id="say"></span><span class="full" id="sayfull" aria-hidden="true"></span></p></div></div>
+ $('root').innerHTML=`<div class="app"><div class="prog"><div class="track" role="progressbar" aria-label="Onboarding progress" aria-valuemin="0" aria-valuemax="100" id="pbar"><i id="pfill"></i></div><b id="ptext"></b></div><aside class="side">
+   <div class="guide">${veraSVG()}<div class="bubble" aria-live="polite"><div class="who">${esc(D.config.botName)}<button class="replay" onclick="say(V.last);hop()" title="Hear that again" aria-label="Hear that again">${SPK}</button></div><p class="say"><span id="say"></span><span class="full" id="sayfull" aria-hidden="true"></span></p></div></div>
    <div><ol class="rail" id="rail"></ol><p class="railnote" id="railnote"></p></div></aside>
   <section><div class="card" id="card"></div>${sl()?`<p class="help">Stuck? <a target="_blank" href="${esc(sl())}">Ask in the general Slack channel</a></p>`:''}</section></div>`;
  draw()}
@@ -464,6 +500,7 @@ function rail(){const cur=steps[i].stage;$('rail').innerHTML=STAGES.map((s,k)=>{
  $('railnote').textContent=cur<5?`Step ${cur+1} of 5: ${STAGES[cur].for}`:'First stage complete.'}
 function draw(){
  const st=steps[i];rail();
+ const pct=Math.round(Math.min(i,LAST_INPUT+1)/(LAST_INPUT+1)*100);$('pfill').style.width=pct+'%';$('pbar').setAttribute('aria-valuenow',pct);$('ptext').textContent=pct+'% complete';
  $('card').innerHTML=`<div class="enter">${st.html()}${st.end?'':`<p class="err" id="err" role="alert"></p><div class="foot">${i>0&&i<11?`<button class="link" type="button" onclick="back()">Back</button>`:'<span></span>'}<button class="btn" id="nx" type="button" onclick="next()">${st.btn||'Continue'}</button></div>`}</div>`;
  if(st.stage!==lastStage&&st.stage<5){toast(`Step ${st.stage+1} unlocked: <i>${STAGES[st.stage].nm}</i>`);confetti(24)}
  lastStage=st.stage;say(st.line());if(st.after)st.after();persist();
@@ -476,7 +513,7 @@ function next(){
  if(i<2||!S.email){i++;hop();draw();return} // nothing to save yet
  busy=true;const b=$('nx'),t=b.textContent;b.disabled=true;b.textContent='Saving…';
  run().withSuccessHandler(res=>{if(res&&res.joined)S.joined=res.joined;busy=false;i++;hop();draw()})
-  .withFailureHandler(()=>{busy=false;b.disabled=false;b.textContent=t;err("That didn't save. Check your internet connection and tap the button again.")})
+  .withFailureHandler(e=>{busy=false;b.disabled=false;b.textContent=t;const m=String(e&&e.message||'');err(/^(Please|Too many|Enter|Pick|That)/.test(m)?m:"That didn't save. Check your internet connection and tap the button again.")})
   .saveStep(S.email,r)}
 document.addEventListener('keydown',e=>{if(e.key==='Enter'&&started&&e.target.matches('input[type=text],input[type=email],input[type=tel]')){e.preventDefault();next()}});
 
