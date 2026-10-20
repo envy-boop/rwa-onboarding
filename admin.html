@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en"><head><script src="config.js"></script><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Onboarding admin | RWA Inc.</title>
+<style>
+:root{--bg:#eef2fb;--card:#fff;--ink:#0b1736;--mute:#56658a;--brand:#1a6df0;--onb:#fff;--line:#d6def0;--tint:rgba(26,109,240,.09);--err:#d42c3a}
+@media(prefers-color-scheme:dark){:root{--bg:#070b16;--card:#0e1528;--ink:#eef2ff;--mute:#93a0bf;--brand:#d8ff4f;--onb:#070b16;--line:#1f2b47;--tint:rgba(216,255,79,.08);--err:#ff6b75}}
+*{box-sizing:border-box}body{margin:0 auto;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px;max-width:1200px}
+header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:4px 0 14px}
+h1{font-size:22px;margin:0}.badge{display:inline-block;margin-left:8px;padding:3px 10px;border-radius:99px;background:var(--tint);color:var(--brand);font-size:13px;font-weight:700;vertical-align:middle}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.t{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.t b{font-size:26px;display:block;line-height:1.2}.t span{color:var(--mute);font-size:13px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-top:14px}
+.card h2{margin:0 0 4px;font-size:16px}.card p{color:var(--mute);margin:0 0 10px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.row>*{flex:1;min-width:170px}
+.scroll{overflow:auto;max-height:70vh;margin-top:10px;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{position:sticky;top:0;background:var(--card);z-index:1}td.sn{font-weight:600}
+textarea,input,select{width:100%;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:120px}#dep{min-height:230px}
+button{padding:10px 16px;border:0;border-radius:10px;background:var(--brand);color:var(--onb);font:600 14px inherit;cursor:pointer}
+button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}.btns select{width:auto;flex:none}
+.ok{color:var(--mute);font-size:13px}.bad{color:var(--err);font-weight:600}
+.gate{max-width:380px;margin:12vh auto;text-align:center}.gate input{margin:12px 0}
+[hidden]{display:none!important}
+</style></head><body>
+<div id="gate" class="gate" hidden><h1>Onboarding admin</h1><p class="ok">Enter the access key you were given.</p><input id="k" placeholder="Access key" autocomplete="off"><button onclick="KEY=$('k').value.trim();load()">Open</button><p class="bad" id="gerr"></p></div>
+
+<div id="app" hidden>
+<header><h1>Onboarding admin<span class="badge" id="role"></span></h1><button class="ghost" onclick="load()">Refresh</button></header>
+<div class="tiles" id="tiles"></div>
+
+<div class="card"><div class="row">
+ <input id="q" placeholder="Search name, email, skill..." oninput="draw()">
+ <select id="fd" onchange="draw()"></select>
+ <select id="fm" onchange="draw()"></select>
+ <select id="fs" onchange="draw()"><option value="">Any status</option><option>Verified</option><option>In progress</option><option>Started</option></select></div>
+ <p class="ok" id="count" style="margin:8px 0 0"></p>
+ <div class="scroll"><table id="tb"></table></div></div>
+
+<div class="card"><h2>Slack handles</h2><p>Handles of the interns in the table above. Filter by department, month joined or status first, then copy.</p>
+ <textarea id="hs" readonly></textarea>
+ <div class="btns"><button onclick="copyHs(this)">Copy</button>
+  <select id="fmt" onchange="draw()"><option value="line">Handles on one line (to paste in Slack)</option><option value="list">One handle per line</option><option value="table">Name, handle, display name, department (for Sheets)</option></select></div></div>
+
+<div class="card" id="depcard"><h2>Departments</h2><p>One per line. Add, rename or delete, then save. Repeats are removed automatically. New interns see the change straight away.</p><textarea id="dep"></textarea>
+ <div class="btns"><button onclick="saveDeps(this)">Save departments</button><span class="ok" id="ok"></span></div></div>
+</div>
+
+<script>
+/* Talks to the Apps Script backend. The backend link lives in config.js. */
+let KEY=(new URLSearchParams(location.search).get('key')||'').trim();
+const API_URL=((window.RWA_CONFIG||{}).apiUrl||'').trim();
+function api(action,payload){
+ if(!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(API_URL))return Promise.reject(new Error('API_URL is not set'));
+ return fetch(API_URL,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action:action},payload||{}))})
+  .then(r=>r.json()).then(d=>{if(!d||d.error)throw new Error(d&&d.error||'Server error');return d.result})}
+function run(){let ok=()=>{},fail=()=>{};const r={withSuccessHandler(f){ok=f;return r},withFailureHandler(f){fail=f;return r},
+ getAdminData(k){api('getAdminData',{key:k}).then(d=>{try{if(k&&!new URLSearchParams(location.search).get('key'))history.replaceState(null,'','?key='+encodeURIComponent(k))}catch(e){}ok(d)},fail)},
+ saveDepartments(k,l){api('saveDepartments',{key:k,list:l}).then(ok,fail)}};return r}
+let R=[],H=[],ROLE='';
+const $=id=>document.getElementById(id);
+const LABEL={DashboardCreated:'Dashboard',ContractSigned:'Contract',SocialsFollowed:'Socials',SlackNameUpdated:'Slack name set',MeetingEmail:'Meeting email',SlackHandle:'Slack handle',HeardAbout:'Heard about us',MeetingInvited:'Meeting invited',AIInterviewCompleted:'AI interview',ProspectivesJoined:'Joined prospectives',JoinedMonth:'Month joined'};
+const FIRST=['Name','SlackHandle','_slack','Department','Country','JoinedMonth','Status','AIInterviewCompleted','ProspectivesJoined','Email','Phone'];
+const c=n=>H.indexOf(n),g=(r,n)=>c(n)<0?'':String(r[c(n)]==null?'':r[c(n)]).trim();
+const esc=s=>String(s).replace(/[&<>"]/g,x=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[x]));
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const month=r=>{const m=g(r,'JoinedMonth');if(m)return m;const d=new Date(g(r,'Started'));return isNaN(d)?'':MON[d.getMonth()]+' '+d.getFullYear()};
+const handle=r=>{const h=g(r,'SlackHandle').replace(/\s+/g,'');return h&&h[0]!=='@'?'@'+h:h};
+const slackName=r=>[g(r,'Name').split(/\s+/)[0],g(r,'Department'),g(r,'Country'),month(r)].join(' | ');
+const val=(r,k)=>k==='_slack'?slackName(r):k==='JoinedMonth'?month(r):k==='SlackHandle'?handle(r):g(r,k);
+const cols=()=>FIRST.filter(k=>k==='_slack'||c(k)>-1).concat(H.filter(h=>FIRST.indexOf(h)<0));
+const mkey=m=>{const p=m.split(' ');return (+p[1]||0)*12+MON.indexOf(p[0])};
+
+function load(){
+ if(!KEY){$('gate').hidden=false;$('app').hidden=true;return}
+ $('gerr').textContent='';
+ run().withSuccessHandler(d=>{H=d.headers;R=d.interns.filter(r=>r.join('').trim());ROLE=d.role;
+  $('gate').hidden=true;$('app').hidden=false;
+  $('role').textContent=ROLE==='admin'?'Full access':'View only';$('depcard').hidden=ROLE!=='admin';
+  $('dep').value=d.departments.join('\n');
+  const keep=(id,html)=>{const v=$(id).value;$(id).innerHTML=html;$(id).value=v;if($(id).value!==v)$(id).value=''};
+  const ds=[...new Set(d.departments.concat(R.map(r=>g(r,'Department')).filter(Boolean)))];
+  keep('fd','<option value="">All departments</option>'+ds.map(x=>`<option>${esc(x)}</option>`).join(''));
+  const ms=[...new Set(R.map(month).filter(Boolean))].sort((a,b)=>mkey(b)-mkey(a));
+  keep('fm','<option value="">Any month joined</option>'+ms.map(x=>`<option>${esc(x)}</option>`).join(''));
+  draw()})
+ .withFailureHandler(e=>{$('app').hidden=true;$('gate').hidden=false;const m=e&&e.message||'';$('gerr').textContent=/Not allowed/.test(m)?'That key is not valid.':/API_URL/.test(m)?'Setup needed: paste the Apps Script link into config.js.':'Could not load. Check your connection and try again.'})
+ .getAdminData(KEY)}
+
+function draw(){
+ const q=$('q').value.toLowerCase(),fd=$('fd').value,fm=$('fm').value,fs=$('fs').value,yes=n=>R.filter(r=>g(r,n).toLowerCase()==='yes').length;
+ const thisMonth=MON[new Date().getMonth()]+' '+new Date().getFullYear();
+ $('tiles').innerHTML=[['Total',R.length],[`Joined ${thisMonth}`,R.filter(r=>month(r)===thisMonth).length],['Verified',R.filter(r=>g(r,'Status')==='Verified').length],['In progress',R.filter(r=>g(r,'Status')!=='Verified').length],['AI interview done',yes('AIInterviewCompleted')],['Joined prospectives',yes('ProspectivesJoined')]]
+  .map(x=>`<div class="t"><b>${x[1]}</b><span>${x[0]}</span></div>`).join('');
+ const rows=R.filter(r=>(!fd||g(r,'Department')===fd)&&(!fm||month(r)===fm)&&(!fs||g(r,'Status')===fs)&&(r.join(' ')+' '+slackName(r)).toLowerCase().includes(q));
+ $('count').textContent=`Showing ${rows.length} of ${R.length} interns`;
+ const K=cols();
+ $('tb').innerHTML='<tr>'+K.map(k=>`<th>${k==='_slack'?'Slack display name':LABEL[k]||k}</th>`).join('')+'</tr>'+
+  rows.map(r=>'<tr>'+K.map(k=>`<td${k==='_slack'?' class="sn"':''}>${esc(val(r,k))}</td>`).join('')+'</tr>').join('');
+ const withH=rows.filter(r=>handle(r)),f=$('fmt').value;
+ $('hs').value=f==='table'?['Name\tSlack handle\tSlack display name\tDepartment'].concat(withH.map(r=>[g(r,'Name'),handle(r),slackName(r),g(r,'Department')].join('\t'))).join('\n')
+  :[...new Set(withH.map(handle))].join(f==='list'?'\n':' ')}
+
+function copyHs(b){const t=$('hs');t.select();const done=()=>{b.textContent='Copied';setTimeout(()=>b.textContent='Copy',1800)};
+ const fb=()=>{try{document.execCommand('copy')}catch(e){}done()};
+ if(navigator.clipboard)navigator.clipboard.writeText(t.value).then(done,fb);else fb()}
+function saveDeps(b){b.disabled=true;$('ok').textContent='Saving...';
+ run().withSuccessHandler(list=>{b.disabled=false;if(Array.isArray(list))$('dep').value=list.join('\n');$('ok').textContent='Saved';setTimeout(()=>$('ok').textContent='',2500)})
+  .withFailureHandler(()=>{b.disabled=false;$('ok').textContent='Not saved. Try again.'}).saveDepartments(KEY,$('dep').value.split('\n'))}
+load();
+</script></body></html>
